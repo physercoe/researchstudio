@@ -1,0 +1,65 @@
+name: Download Wandb Image
+# 触发条件：手动点击按钮触发
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: '镜像名称 (例如 wandb/local)'
+        required: true
+        default: 'wandb/local'
+      image_tag:
+        description: '镜像标签 (例如 latest)'
+        required: true
+        default: 'latest'
+
+jobs:
+  download-and-pack:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 检出代码（标准步骤）
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. 清理磁盘空间 (关键步骤！)
+      # wandb/local 非常大，标准 Runner 的 14GB 空间可能不够用，这个步骤会释放约 10-20GB 空间
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # 删除不需要的预装软件以腾出空间
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      # 3. 拉取镜像
+      - name: Pull Docker Image
+        run: |
+          echo "正在拉取镜像: ${{ inputs.image_name }}:${{ inputs.image_tag }} ..."
+          docker pull ${{ inputs.image_name }}:${{ inputs.image_tag }}
+
+      # 4. 导出并压缩镜像
+      # 使用 gzip 压缩，否则生成的 tar 包太大，上传和下载都会很慢
+      - name: Save and Compress Image
+        run: |
+          echo "正在导出并压缩镜像，这可能需要几分钟..."
+          # 将镜像名中的斜杠替换为下划线，用于文件名
+          FILENAME=$(echo "${{ inputs.image_name }}_${{ inputs.image_tag }}" | tr '/' '_')
+          
+          # 导出并通过管道直接 gzip 压缩
+          docker save ${{ inputs.image_name }}:${{ inputs.image_tag }} | gzip > ${FILENAME}.tar.gz
+          
+          echo "FILE_PATH=${FILENAME}.tar.gz" >> $GITHUB_ENV
+          echo "打包完成，文件大小："
+          ls -lh ${FILENAME}.tar.gz
+
+      # 5. 上传 Artifact (结果文件)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-wandb
+          path: ${{ env.FILE_PATH }}
+          retention-days: 1 # 只保留1天，避免浪费资源
+          compression-level: 0 # 既然我们已经手动 gzip 了，这里就不需要再次压缩
